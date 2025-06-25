@@ -1,0 +1,310 @@
+# @title ## 🚀 YouTube Video/Audio Downloader to Google Drive (Combined & Fully Fixed)
+
+# @markdown ### Instructions:
+# @markdown 1.  **CRITICAL: Restart your Colab runtime completely:**
+# @markdown     *   Go to `Runtime` in the top menu.
+# @markdown     *   Select `Disconnect and delete runtime`.
+# @markdown     *   Then, go to `Runtime` again and select `Run all`.
+# @markdown 2.  **Run this entire cell.**
+# @markdown 3.  **Carefully observe ALL output from the very top of the cell.**
+# @markdown     *   **Does it print `--- ✅ Setup Complete! Ready for Download! ---` at the very end?**
+# @markdown     *   **Are there ANY red error messages or Python tracebacks anywhere in the output *before* the widgets appear?** (This is the most likely culprit if the button doesn't work).
+# @markdown 4.  **Follow the Google Drive mounting prompts:** A link will appear; click it, choose your Google account, authorize access, copy the code, and paste it back into the input box in Colab. Press Enter.
+# @markdown 5.  **Once the widgets appear, configure your download and click "Start Download".**
+# @markdown     *   **If you select "Custom yt-dlp Format Code", a new input box will appear for you to enter the code.**
+# @markdown     *   **Does "FUNCTION CALLED! This confirms the button is working." appear in the output area below the button after clicking?**
+
+# @markdown ---
+
+import os
+import subprocess
+from google.colab import drive
+from IPython.display import display, Markdown, HTML
+import ipywidgets as widgets
+import time # Used for small delays, can sometimes help with Colab UI rendering
+
+print("🚀 Starting Setup and Download Environment...")
+
+# --- 1. Setup & Install yt-dlp ---
+print("\n📦 Installing/Upgrading yt-dlp...")
+try:
+    install_output = subprocess.run(['pip', 'install', 'yt-dlp', '-U'], capture_output=True, text=True, check=True)
+    print(install_output.stdout)
+    if install_output.stderr:
+        print("Installation Warnings/Errors (if any):")
+        print(install_output.stderr)
+    print("✅ yt-dlp installation/upgrade complete!")
+except subprocess.CalledProcessError as e:
+    print(HTML(f"""<b style="color:red;">❌ ERROR: Failed to install yt-dlp.</b>"""))
+    print(f"Details:\n{e.stdout}\n{e.stderr}")
+    print("Please check the output above for details. You might need to restart runtime and try again.")
+    raise # Stop execution if install fails
+except Exception as e:
+    print(HTML(f"""<b style="color:red;">❌ An unexpected error occurred during yt-dlp installation: {e}</b>"""))
+    raise
+
+# Verify yt-dlp is callable
+print("\n🔬 Verifying yt-dlp installation...")
+try:
+    version_output = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True, check=True)
+    print(f"✅ yt-dlp is callable! Version: {version_output.stdout.strip()}")
+except subprocess.CalledProcessError as e:
+    print(HTML(f"""<b style="color:red;">❌ ERROR: yt-dlp is not callable after installation.</b>"""))
+    print(f"Details:\n{e.stdout}\n{e.stderr}")
+    print("This indicates a serious issue. Please restart your Colab runtime and try again.")
+    raise # Stop execution if not callable
+except FileNotFoundError:
+    print(HTML("""<b style="color:red;">❌ ERROR: yt-dlp command not found. Installation likely failed.</b>"""))
+    print("Please restart your Colab runtime (Runtime -> Disconnect and delete runtime, then Runtime -> Run all) and try again.")
+    raise
+
+# --- 2. Mount Google Drive ---
+print("\n🔗 Mounting Google Drive. Please follow the authorization prompts...")
+time.sleep(1) # Small delay
+try:
+    drive.mount('/content/drive')
+    print("✅ Google Drive mounted successfully!")
+except Exception as e:
+    print(HTML(f"""<b style="color:red;">❌ ERROR: Failed to mount Google Drive: {e}</b>"""))
+    print("Please ensure you are signed into your Google account and authorized access.")
+    raise # Stop execution if drive fails to mount
+
+# Define base download path
+base_drive_path = '/content/drive/MyDrive'
+default_download_folder_name = 'YouTube Downloads'
+
+# --- 3. User Interface Widgets Definition ---
+print("\n⚙️ Defining UI widgets...")
+time.sleep(1) # Small delay
+
+youtube_url_input = widgets.Text(
+    value='',
+    placeholder='Paste YouTube Video/Playlist URL here (e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ)',
+    description='YouTube URL:',
+    disabled=False,
+    layout=widgets.Layout(width='auto')
+)
+
+download_type_select = widgets.Dropdown(
+    options=[
+        ('Video: Best Quality (MP4)', 'best_video_mp4'),
+        ('Video: 1080p (MP4 preferred)', '1080p_mp4'),
+        ('Video: 720p (MP4 preferred)', '720p_mp4'),
+        ('Video: 480p (MP4 preferred)', '480p_mp4'),
+        ('Video: Lowest Quality (smallest file)', 'lowest_quality_video'),
+        ('Audio Only: MP3 (Best Quality)', 'audio_mp3'),
+        ('Custom yt-dlp Format Code', 'custom_format') # New option
+    ],
+    value='best_video_mp4', # Default to best video quality
+    description='Download As:',
+    disabled=False,
+)
+
+download_playlist_checkbox = widgets.Checkbox(
+    value=False,
+    description='Download Playlist (if URL is a playlist)',
+    disabled=False,
+    indent=False
+)
+
+output_filename_input = widgets.Text(
+    value='%(title)s.%(ext)s',
+    placeholder='e.g., %(title)s.%(ext)s or MyCustomVideo.mp4',
+    description='Filename Format:',
+    disabled=False,
+    layout=widgets.Layout(width='auto')
+)
+filename_help_text = Markdown("""
+**Filename Format:**
+*   `%(title)s.%(ext)s`: Default, uses video title and original extension.
+*   `%(id)s.%(ext)s`: Uses YouTube ID.
+*   `%(uploader)s - %(title)s.%(ext)s`: Include uploader name.
+*   `My_Custom_Name.mp4`: Set a fixed name.
+*   **Important**: Do NOT include slashes (`/`) in the filename as it will create subfolders unless intended.
+""")
+
+use_custom_path_checkbox = widgets.Checkbox(
+    value=False,
+    description='Use Custom Subfolder in Google Drive (e.g., "My Videos")',
+    disabled=False,
+    indent=False
+)
+
+custom_path_input = widgets.Text(
+    value=default_download_folder_name, # Pre-fill with default
+    placeholder='Enter your custom subfolder name (e.g., "My Anime")',
+    description='Custom Subfolder:',
+    disabled=True, # Initially disabled
+    layout=widgets.Layout(width='auto')
+)
+
+# New widget for custom yt-dlp format code
+custom_format_code_input = widgets.Text(
+    value='',
+    placeholder='e.g., bestvideo[height<=720][ext=mp4]+bestaudio',
+    description='yt-dlp Format Code:',
+    disabled=True, # Initially disabled
+    layout=widgets.Layout(width='auto')
+)
+custom_format_code_help = Markdown("""
+**Custom Format Code:**
+Enter a `yt-dlp` format selector (e.g., `bestvideo[ext=mp4]+bestaudio[ext=m4a]`, `137+140`, `best[height<=720]`).
+You can find format codes using `!yt-dlp -F <YOUR_VIDEO_URL>` in a separate Colab cell.
+""")
+
+# Function to toggle custom path input visibility
+def on_custom_path_checkbox_change(change):
+    custom_path_input.disabled = not change['new']
+use_custom_path_checkbox.observe(on_custom_path_checkbox_change, names='value')
+
+# Function to toggle custom format code input visibility
+def on_download_type_select_change(change):
+    custom_format_code_input.disabled = (change['new'] != 'custom_format')
+download_type_select.observe(on_download_type_select_change, names='value')
+
+
+start_download_button = widgets.Button(
+    description="Start Download",
+    button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+    icon='download'
+)
+output_area = widgets.Output()
+
+print("✅ UI widgets defined.")
+
+# --- Download Logic Function ---
+def start_download_action(b):
+    with output_area:
+        output_area.clear_output() # Clear previous output for new download
+        # --- DIAGNOSTIC PRINT ---
+        print("FUNCTION CALLED! This confirms the button is working.")
+        # --- END DIAGNOSTIC PRINT ---
+
+        url = youtube_url_input.value.strip()
+        selected_download_type = download_type_select.value # Changed variable name for clarity
+        filename_format = output_filename_input.value.strip()
+        is_playlist = download_playlist_checkbox.value
+        custom_subfolder_name = custom_path_input.value.strip() if use_custom_path_checkbox.value else default_download_folder_name
+
+        if not url:
+            print(HTML("""<b style="color:red;">Error: Please enter a YouTube URL.</b>"""))
+            return
+
+        if selected_download_type == 'custom_format' and not custom_format_code_input.value.strip():
+            print(HTML("""<b style="color:red;">Error: Please enter a custom yt-dlp format code or select another option.</b>"""))
+            return
+
+        download_path = os.path.join(base_drive_path, custom_subfolder_name)
+
+        if use_custom_path_checkbox.value and not custom_subfolder_name:
+            print(HTML("""<b style="color:red;">Error: Custom subfolder name cannot be empty if selected.</b>"""))
+            return
+
+        # Create the target download folder if it doesn't exist
+        try:
+            os.makedirs(download_path, exist_ok=True)
+            print(f"📁 Target download folder: {download_path}")
+        except Exception as e:
+            print(HTML(f"""<b style="color:red;">Error: Could not create/access download folder: {download_path}</b>"""))
+            print(f"Details: {e}")
+            return
+
+        print(f"\n🎬 Starting download for: {url}")
+        print(f"📥 Download type: {selected_download_type.replace('_', ' ').title()}")
+        print(f"🎵 Playlist download: {'Yes' if is_playlist else 'No (single video)'}")
+        print("-" * 50)
+
+        # Build the yt-dlp command (as a list for subprocess)
+        command_list = ["yt-dlp"]
+
+        # Handle playlist download
+        if not is_playlist:
+            command_list.append("--no-playlist") # Force single video even if URL is part of a playlist
+
+        # Output path and filename
+        command_list.extend(['-o', os.path.join(download_path, filename_format)])
+
+        # --- Format Selection Logic ---
+        if selected_download_type == 'best_video_mp4':
+            command_list.extend(['-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '--merge-output-format', 'mp4'])
+        elif selected_download_type == '1080p_mp4':
+            command_list.extend(['-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best', '--merge-output-format', 'mp4'])
+        elif selected_download_type == '720p_mp4':
+            command_list.extend(['-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best', '--merge-output-format', 'mp4'])
+        elif selected_download_type == '480p_mp4':
+            command_list.extend(['-f', 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best', '--merge-output-format', 'mp4'])
+        elif selected_download_type == 'lowest_quality_video':
+            # This attempts to get the lowest resolution video and merge with best audio
+            command_list.extend(['-f', 'worstvideo[ext=mp4]+bestaudio[ext=m4a]/worst[ext=mp4]/worst', '--merge-output-format', 'mp4'])
+        elif selected_download_type == 'audio_mp3':
+            command_list.extend(['-x', '--audio-format', 'mp3', '--audio-quality', '0']) # 0 is best quality VBR
+        elif selected_download_type == 'custom_format':
+            custom_code = custom_format_code_input.value.strip()
+            command_list.extend(['-f', custom_code])
+            # For custom formats, we can't assume merge-output-format without more analysis
+            # User is responsible for understanding their custom format
+            print(HTML(f"""<b style="color:orange;">Warning:</b> For custom formats, ensure your format code includes both video and audio if desired, or explicitly handles merging.""")) # FIXED LINE
+
+        # Add URL
+        command_list.append(url)
+
+        print("Executing command:")
+        print(f"`{' '.join(command_list)}`")
+        print("\n--- yt-dlp Output (Live) ---")
+
+        # Execute the command using subprocess.Popen for real-time output
+        try:
+            process = subprocess.Popen(command_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in iter(process.stdout.readline, ''):
+                print(line, end='') # Print line by line
+            process.stdout.close()
+            return_code = process.wait()
+
+            if return_code == 0:
+                print(HTML(f"""\n<b style="color:green;">✅ Download process completed successfully for: {url}</b>"""))
+                print(f"Check your Google Drive folder: <a href='https://drive.google.com/drive/folders/{os.path.basename(download_path)}' target='_blank'>{download_path}</a>")
+            else:
+                print(HTML(f"""\n<b style="color:red;">❌ Download failed with exit code {return_code} for: {url}</b>"""))
+                print("Please review the output above for error messages from yt-dlp.")
+                print(HTML("""<br><b style='color:orange;'>Common issues:</b>"""))
+                print("- Invalid or private YouTube URL.")
+                print("- Network issues.")
+                print("- YouTube changed its format (try restarting Colab runtime and re-running all cells).")
+                print("- Incorrect 'Custom yt-dlp Format Code'.")
+
+        except FileNotFoundError:
+            print(HTML("""<b style="color:red;">ERROR: yt-dlp command not found.</b>"""))
+            print("This should not happen if setup was successful. Please restart runtime.")
+        except Exception as e:
+            print(HTML(f"""\n<b style="color:red;'>An unexpected error occurred during execution: {e}</b>"""))
+
+# --- Display UI and Link Button ---
+print("\n🔗 Linking button to download action...")
+time.sleep(1) # Small delay
+try:
+    start_download_button.on_click(start_download_action)
+    print("✅ Button linked successfully.")
+
+    print("\n🖥️ Displaying UI widgets...")
+    time.sleep(1) # Small delay
+    display(
+        youtube_url_input,
+        download_type_select,
+        custom_format_code_input, # Display custom format input here
+        custom_format_code_help, # Display help text for custom format
+        download_playlist_checkbox,
+        output_filename_input,
+        filename_help_text,
+        use_custom_path_checkbox,
+        custom_path_input,
+        start_download_button,
+        output_area
+    )
+    print("✅ UI widgets displayed.")
+
+except Exception as e:
+    print(HTML(f"""<b style="color:red;">❌ ERROR: Failed to display UI widgets or link button.</b>"""))
+    print(f"Details: {e}")
+    print("This might indicate an issue with `ipywidgets` itself or a corrupted Colab session.")
+
+print("\n--- ✅ Setup Complete! Ready for Download! ---")
